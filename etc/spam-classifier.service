@@ -1,0 +1,14 @@
+[Unit]
+Description=Spam classifier
+After=spam-analyzer.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=sinkhole
+WorkingDirectory=/opt/spam-classifier
+ExecStart=python3 queue_manager.py
+
+[Install]
+WantedBy=multi-user.target

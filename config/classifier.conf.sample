@@ -1,0 +1,8 @@
+[CLASSIFIER]
+database_addr = localhost
+database_name = spam_analyzer
+database_user = spam-analyzer
+database_passwd = ChangeMe
+processing_finished_dir = /sinkhole/processing_finished
+attachments_dir = /sinkhole/attachments
+retained_messages_dir = /sinkhole/retained_messages
