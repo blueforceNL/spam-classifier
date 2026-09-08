@@ -68,10 +68,11 @@ The spam-classifier is called automatically from the queue manager, which polls 
 is found in the queue, it calls `wrapper.py` with the mail ID as argument. The wrapper will pull all information from the database
 using the mail ID and execute the classifier.
 
-The classifier can be run manually as follows.
+The classifier can be run manually as follows (requires working directory as it uses relative paths).
 
 ```
-python3 /opt/spam-classifier/wrapper.py <mail_id>
+cd /opt/spam-classifier
+python3 wrapper.py <mail_id>
 ```
 
 By specifying the `-v` argument, the wrapper runs in verbose mode, and implicitly also dry-run mode. This means that the wrapper will
