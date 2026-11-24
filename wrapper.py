@@ -306,7 +306,7 @@ if "detections" in classifier_json:
 		# Select detection from the database.
 		detection_result = execute_select_sql_query(database, ("SELECT id,store_message_file FROM mail_classifications WHERE name = '%s'" % detection["name"]))
 		if len(detection_result) != 1:
-			eprint("Detection: %s was not found in the database! Exiting." % detection["name"])
+			eprint("Detection: %s was not found in the database! Must be added manually.." % detection["name"])
 			exit(1)
 
 		# Get the ID of the detection to link to.

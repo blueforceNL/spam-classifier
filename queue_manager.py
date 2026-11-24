@@ -14,24 +14,30 @@ import logging
 import time
 from classifier_config import load_or_create_config
 from systemd import journal
+from contextlib import closing
 
 # ----------------------------------------------------------|
 # Database functions.                                       |
 # ----------------------------------------------------------|
 
-# Executes a mutation query (INSERT, UPDATE, etc) to the MySQL database server.
+# Executes a mutation query (INSERT, UPDATE, etc) to the MySQL database server. Requires to be parameterized for SQL injection protection.
 def execute_mutation_sql_query(db, q, params):
-	cursorObject = db.cursor()
-	cursorObject.execute(q, params)
-	db.commit()
-	return cursorObject.lastrowid
+	with closing(db.cursor()) as cursorObject:
+		try:
+			cursorObject.execute(q, params)
+			db.commit()
+			return cursorObject.lastrowid
+		except Exception:
+			db.rollback()
+			raise
 
-# Executes a SELECT query that returns results.
-def execute_select_sql_query(db, q):
-	cursorObject = db.cursor(buffered=True)
-	cursorObject.execute(q)
-	db.commit()
-	return cursorObject.fetchall()
+# Executes a SELECT query that returns results. Also a parameterized function to safeguard against SQL injection.
+def execute_select_sql_query(db, q, params):
+	with closing(db.cursor(buffered=True)) as cursorObject:
+		cursorObject.execute(q, params)
+		rows = cursorObject.fetchall()
+		db.commit()
+		return rows
 
 # -----------------------------------------------------------
 
@@ -98,7 +104,7 @@ sigHandler = SignalHandler()
 while not sigHandler.break_loop:
 	# Query the spam_classifier_queue table to check for new entries. We pick the ones with the lowest ID to process first.
 	# To avoid doing too many database queries, we select up to 5 new queue items in one query.
-	queue_entries_result = execute_select_sql_query(database, "SELECT id,mail_id FROM spam_classifier_queue ORDER BY id LIMIT 5")
+	queue_entries_result = execute_select_sql_query(database, "SELECT id,mail_id FROM spam_classifier_queue ORDER BY id LIMIT 5", ())
 	for queue_entry in queue_entries_result:
 		id = queue_entry[0]
 		mail_id = queue_entry[1]
@@ -121,16 +127,16 @@ while not sigHandler.break_loop:
 			for error in classifier_errors.split('\n'):
 				logger.error(error)
 		else:
-			# Parse the result from the wrapper on STDOUT. This is a simple indicator string.
-			if classifier_result == "DETECTED" or classifier_result == "CLEAN":
-				# The wrapper takes care of all database operations regarding the detection.
-				# Just delete the row from the spam_classifier_queue table and move on to the next.
-				execute_mutation_sql_query(database, "DELETE FROM spam_classifier_queue WHERE id = %s", (id,))
-			else:
+			# Parse the result from the wrapper on STDOUT. This is a simple indicator string. If the result is unexpected, log an error.
+			if classifier_result != "DETECTED" and classifier_result != "CLEAN":
 				logger.error("Unknown classifier wrapper output: %s" % classifier_result)
+			else:
+				# Print informational log entry about the processing of this entry.
+				logger.info("Processed entry: %i for mail ID: %i. Result: %s" % (id, mail_id, classifier_result))
 
-			# Print simple informational log entry about the processing of this entry.
-			logger.info("Processed entry: %i for mail ID: %i. Result: %s" % (id, mail_id, classifier_result))
+		# The wrapper takes care of all database operations regarding the detection.
+		# Just delete the row from the spam_classifier_queue table and move on to the next.
+		execute_mutation_sql_query(database, "DELETE FROM spam_classifier_queue WHERE id = %s", (id,))
 
 	# Sleep a little bit to avoid hogging the CPU.
 	time.sleep(1/100)
