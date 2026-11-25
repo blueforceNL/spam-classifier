@@ -99,6 +99,13 @@ if database is None:
 
 # -----------------------------------------------------------
 
+# Get classifier timeout value from the configuration.
+try:
+	classifier_timeout_seconds = int(classifier_config["classifier_timeout_seconds"])
+except ValueError:
+	logger.error("Expected integer value for 'classifier_timeout_seconds' in the configuration!")
+	exit(1)
+
 # Enter the program loop, staying alive and checking for new entries in the classifier queue.
 sigHandler = SignalHandler()
 while not sigHandler.break_loop:
@@ -113,10 +120,13 @@ while not sigHandler.break_loop:
 		# does not execute longer than allowed. If it does, we will kill it and record an error.
 		try:
 			command = [ 'python3', '/opt/spam-classifier/wrapper.py', str(mail_id) ]
-			p = subprocess.run(command, capture_output=True, text=True)
+			p = subprocess.run(command, capture_output=True, text=True, timeout=classifier_timeout_seconds)
 			classifier_result = p.stdout.strip()
 			exit_code = p.returncode
 		except KeyboardInterrupt:
+			continue
+		except subprocess.TimeoutExpired:
+			logger.error("Classifier timed out when processing mail ID: %i!" % mail_id)
 			continue
 
 		# If the exit code was 1, an error occurred and we will log the errors put out by the wrapper.

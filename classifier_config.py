@@ -10,6 +10,7 @@ DEFAULT_DB_ADDR = "localhost"
 DEFAULT_DB_NAME = "spam_analyzer"
 DEFAULT_DB_USER = "spam-analyzer"
 DEFAULT_DB_PWD = "ChangeMe"
+DEFAULT_CLASSIFIER_TIMEOUT_SECONDS = "60"
 PROCESSING_FINISHED_DIR = "/sinkhole/processing_finished"
 ATTACHMENTS_DIR = "/sinkhole/attachments"
 RETAINED_MESSAGES_DIR = "/sinkhole/retained_messages"
@@ -32,6 +33,7 @@ def create_default_configuration(path):
 		"processing_finished_dir" : PROCESSING_FINISHED_DIR,
 		"attachments_dir" : ATTACHMENTS_DIR,
 		"retained_messages_dir" : RETAINED_MESSAGES_DIR,
+		"classifier_timeout_seconds" : DEFAULT_CLASSIFIER_TIMEOUT_SECONDS,
 	}
 
 	# Write default configuration to the config directory.
