@@ -15,24 +15,30 @@ import re
 import shutil
 import ipaddress
 from classifier_config import load_or_create_config
+from contextlib import closing
 
 # ----------------------------------------------------------|
 # Database functions.                                       |
 # ----------------------------------------------------------|
 
-# Executes a mutation query (INSERT, UPDATE, etc) to the MySQL database server.
+# Executes a mutation query (INSERT, UPDATE, etc) to the MySQL database server. Requires to be parameterized for SQL injection protection.
 def execute_mutation_sql_query(db, q, params):
-	cursorObject = db.cursor()
-	cursorObject.execute(q, params)
-	db.commit()
-	return cursorObject.lastrowid
+	with closing(db.cursor()) as cursorObject:
+		try:
+			cursorObject.execute(q, params)
+			db.commit()
+			return cursorObject.lastrowid
+		except Exception:
+			db.rollback()
+			raise
 
-# Executes a SELECT query that returns results.
-def execute_select_sql_query(db, q):
-	cursorObject = db.cursor(buffered=True)
-	cursorObject.execute(q)
-	db.commit()
-	return cursorObject.fetchall()
+# Executes a SELECT query that returns results. Also a parameterized function to safeguard against SQL injection.
+def execute_select_sql_query(db, q, params):
+	with closing(db.cursor(buffered=True)) as cursorObject:
+		cursorObject.execute(q, params)
+		rows = cursorObject.fetchall()
+		db.commit()
+		return rows
 
 # -----------------------------------------------------------
 
@@ -74,13 +80,13 @@ def delete_message_from_disk(mail_id, message_file_path, num_attachments, attach
 
 	# Before removing attachments, we want to make sure no other mail message in the database links to them. If so, we will just remove the links from the current mail message.
 	# Othewise, we will remove the attachment as well. First obtain all attachment links and check the number of references.
-	attachments_result = execute_select_sql_query(database, ("SELECT id,attachment_id FROM mail_attachment_link WHERE mail_id = %i" % mail_id))
+	attachments_result = execute_select_sql_query(database, "SELECT id,attachment_id FROM mail_attachment_link WHERE mail_id = %s", (mail_id,))
 	for attachment_link in attachments_result:
 		# Remove the attachment link from the database.
 		execute_mutation_sql_query(database, "DELETE FROM mail_attachment_link WHERE id = %s", (attachment_link[0],))
 
 		# Check whether there are more references to the current attachment than just this mail ID.
-		other_attachment_refs = execute_select_sql_query(database, ("SELECT id FROM mail_attachment_link WHERE attachment_id = %i" % (attachment_link[1],)))
+		other_attachment_refs = execute_select_sql_query(database, "SELECT id FROM mail_attachment_link WHERE attachment_id = %s", (attachment_link[1],))
 		if len(other_attachment_refs) == 0:
 			# No other references to this attachment. Delete it from the database.
 			execute_mutation_sql_query(database, "DELETE FROM potentially_malicious_attachments WHERE id = %s", (attachment_link[1],))
@@ -140,7 +146,7 @@ json_obj = {}
 json_obj["version"] = obtain_version_number()
 
 # Select basic metadata from the analyzed_mail table given the mail ID.
-mail_entry_result = execute_select_sql_query(database, ("SELECT * FROM analyzed_mail WHERE id = %i" % mail_id_arg))
+mail_entry_result = execute_select_sql_query(database, "SELECT * FROM analyzed_mail WHERE id = %s", (mail_id_arg,))
 if len(mail_entry_result) < 1:
 	eprint("Mail ID was not found in analyzed_mail table!")
 	exit(1)
@@ -194,7 +200,7 @@ if potentially_malicious:
 	json_obj["mail"]["message_file_path"] = full_message_path
 
 # Query the mail message body and include it in the JSON object.
-mail_body_result = execute_select_sql_query(database, ("SELECT encoded_body FROM mail_message_bodies WHERE mail_id = %i" % mail_id))
+mail_body_result = execute_select_sql_query(database, "SELECT encoded_body FROM mail_message_bodies WHERE mail_id = %s", (mail_id,))
 if len(mail_body_result) < 1:
 	eprint("Mail message body missing from database!")
 else:
@@ -202,7 +208,7 @@ else:
 	json_obj["mail"]["encoded_body"] = mail_body_entry[0]
 
 # Query the domain associated to the incoming mail message.
-domain_entry_result = execute_select_sql_query(database, ("SELECT domain,sinkholed,added,countries.name FROM domains JOIN countries ON domains.country_id = countries.id WHERE domains.id = %i" % mail_entry[14]))
+domain_entry_result = execute_select_sql_query(database, "SELECT domain,sinkholed,added,countries.name FROM domains JOIN countries ON domains.country_id = countries.id WHERE domains.id = %s", (mail_entry[14],))
 if len(domain_entry_result) < 1:
 	eprint("No domain was associated to this mail message!")
 else:
@@ -214,7 +220,7 @@ else:
 	json_obj["domain"]["country"] = domain_entry[3]
 
 # Select all extracted URLs associated to this mail message. If there are no, we omit the object.
-extracted_urls_result = execute_select_sql_query(database, ("SELECT url FROM extracted_urls WHERE mail_id = %i" % mail_id))
+extracted_urls_result = execute_select_sql_query(database, "SELECT url FROM extracted_urls WHERE mail_id = %s", (mail_id,))
 if len(extracted_urls_result) > 0:
 	extracted_urls = []
 	for url in extracted_urls_result:
@@ -222,7 +228,7 @@ if len(extracted_urls_result) > 0:
 	json_obj["extracted_urls"] = extracted_urls
 
 # Select all extracted BTC addresses associated to this mail message. If there are no, we omit the object.
-extracted_btc_result = execute_select_sql_query(database, ("SELECT btc FROM extracted_btc WHERE mail_id = %i" % mail_id))
+extracted_btc_result = execute_select_sql_query(database, "SELECT btc FROM extracted_btc WHERE mail_id = %s", (mail_id,))
 if len(extracted_btc_result) > 0:
 	extracted_btc = []
 	for btc in extracted_btc_result:
@@ -230,7 +236,7 @@ if len(extracted_btc_result) > 0:
 	json_obj["extracted_btc"] = extracted_btc
 
 # Select all attachments extracted from the database and add them to the JSON object. If there are not attachments, we omit the object.
-attachments_result = execute_select_sql_query(database, ("SELECT sha256_hash,size,filename,filename_on_disk,mime_types.description FROM mail_attachment_link JOIN potentially_malicious_attachments ON potentially_malicious_attachments.id = attachment_id JOIN mime_types ON mime_type_id = mime_types.id WHERE mail_id = %i" % mail_id))
+attachments_result = execute_select_sql_query(database, "SELECT sha256_hash,size,filename,filename_on_disk,mime_types.description FROM mail_attachment_link JOIN potentially_malicious_attachments ON potentially_malicious_attachments.id = attachment_id JOIN mime_types ON mime_type_id = mime_types.id WHERE mail_id = %s", (mail_id,))
 num_attachments = len(attachments_result)
 attachments_dir = os.path.join(classifier_config["attachments_dir"], mail_message_filename)
 if num_attachments > 0:
@@ -284,10 +290,10 @@ if args.verbose:
 # Now find out whether there is already a detection linked to this mail message.
 # If so, we must remove it: new detection logic may or may not induce a new classification.
 # Suppose there were too much false positives with a previous detection, then we will have loose ends if we don't remove the old crap.
-detection_link_result = execute_select_sql_query(database, ("SELECT id FROM mail_classifications_link WHERE mail_id = %i" % mail_id))
+detection_link_result = execute_select_sql_query(database, "SELECT id FROM mail_classifications_link WHERE mail_id = %s", (mail_id,))
 for entry in detection_link_result:
 	# Select all indicators linked to this detection. We want to check if any of those have more than one reference.
-	classification_indicators_result = execute_select_sql_query(database, ("SELECT indicator_id FROM indicator_classification_link WHERE classifications_link_id = %i" % entry[0]))
+	classification_indicators_result = execute_select_sql_query(database, "SELECT indicator_id FROM indicator_classification_link WHERE classifications_link_id = %s", (entry[0],))
 
 	# Remove the link to the indicator from the given mail ID. Then, only other links will appear below and we should not touch them.
 	execute_mutation_sql_query(database, "DELETE FROM indicator_classification_link WHERE classifications_link_id = %s", (entry[0],))
@@ -295,7 +301,7 @@ for entry in detection_link_result:
 	# Iterate over the linked indicators to see if there are any other links remaining.
 	for linked_indicator in classification_indicators_result:
 		# Select all indicator links with the same ID as this one, having a different classification ID.
-		other_indicator_links_result = execute_select_sql_query(database, ("SELECT id FROM indicator_classification_link WHERE indicator_id = %i" % (linked_indicator[0],)))
+		other_indicator_links_result = execute_select_sql_query(database, "SELECT id FROM indicator_classification_link WHERE indicator_id = %s", (linked_indicator[0],))
 		if len(other_indicator_links_result) == 0:
 			# No other links to this indicator exist, and therefore, we can remove the indicator from the database as well.
 			execute_mutation_sql_query(database, "DELETE FROM indicators WHERE id = %s", (linked_indicator[0],))
@@ -315,7 +321,7 @@ if "detections" in classifier_json:
 	detections = classifier_json["detections"]
 	for detection in detections:
 		# Select detection from the database.
-		detection_result = execute_select_sql_query(database, ("SELECT id,store_message_file FROM mail_classifications WHERE name = '%s'" % detection["name"]))
+		detection_result = execute_select_sql_query(database, "SELECT id,store_message_file FROM mail_classifications WHERE name = %s", (detection["name"],))
 		if len(detection_result) != 1:
 			eprint("Detection: %s was not found in the database! Must be added manually.." % detection["name"])
 			exit(1)
@@ -327,7 +333,7 @@ if "detections" in classifier_json:
 			retain_message = True
 
 		# Query the most recent system API state, we will insert that value with the new classification.
-		system_api_state_result = execute_select_sql_query(database, "SELECT MAX(state) FROM api_state");
+		system_api_state_result = execute_select_sql_query(database, "SELECT MAX(state) FROM api_state", ());
 		if len(system_api_state_result) == 0:
 			eprint("System API state table is empty! No state was obtained, so execution aborted.")
 			exit(1)
@@ -344,7 +350,7 @@ if "detections" in classifier_json:
 		# Now we process the indicators associated with the detection.
 		for indicator in detection["indicators"]:
 			# Get the correct indicator ID from the text representation in the JSON output.
-			indicator_type_id_result = execute_select_sql_query(database, ("SELECT id FROM indicator_types WHERE type = '%s'" % indicator["type"]))
+			indicator_type_id_result = execute_select_sql_query(database, "SELECT id FROM indicator_types WHERE type = %s", (indicator["type"],))
 			if len(indicator_type_id_result) == 0:
 				eprint("Could not find indicator type: %s in the database! Skipping indicator." % indicator["type"])
 				continue
@@ -352,7 +358,7 @@ if "detections" in classifier_json:
 			# Query the indicators table to check whether this indicator already exists. If so, we only need to insert a link to the new classification.
 			indicator_type_entry = indicator_type_id_result[0]
 			indicator_type_id = indicator_type_entry[0]
-			indicator_result = execute_select_sql_query(database, ("SELECT id FROM indicators WHERE indicator_type_id = %s AND value = '%s'" % (indicator_type_id, indicator["value"])))
+			indicator_result = execute_select_sql_query(database, "SELECT id FROM indicators WHERE indicator_type_id = %s AND value = %s", (indicator_type_id, indicator["value"]))
 			if len(indicator_result) == 0:
 				# Indicator does not exist in the database yet, so insert it here.
 				indicator_id = execute_mutation_sql_query(database, "INSERT INTO indicators(indicator_type_id,value) VALUES (%s,%s)", (indicator_type_id, indicator["value"]))

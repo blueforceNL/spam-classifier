@@ -9,24 +9,30 @@ import mysql.connector
 import sys
 import datetime
 from classifier_config import load_or_create_config
+from contextlib import closing
 
 # ----------------------------------------------------------|
 # Database functions.                                       |
 # ----------------------------------------------------------|
 
-# Executes a mutation query (INSERT, UPDATE, etc) to the MySQL database server.
+# Executes a mutation query (INSERT, UPDATE, etc) to the MySQL database server. Requires to be parameterized for SQL injection protection.
 def execute_mutation_sql_query(db, q, params):
-	cursorObject = db.cursor()
-	cursorObject.execute(q, params)
-	db.commit()
-	return cursorObject.lastrowid
+	with closing(db.cursor()) as cursorObject:
+		try:
+			cursorObject.execute(q, params)
+			db.commit()
+			return cursorObject.lastrowid
+		except Exception:
+			db.rollback()
+			raise
 
-# Executes a SELECT query that returns results.
-def execute_select_sql_query(db, q):
-	cursorObject = db.cursor(buffered=True)
-	cursorObject.execute(q)
-	db.commit()
-	return cursorObject.fetchall()
+# Executes a SELECT query that returns results. Also a parameterized function to safeguard against SQL injection.
+def execute_select_sql_query(db, q, params):
+	with closing(db.cursor(buffered=True)) as cursorObject:
+		cursorObject.execute(q, params)
+		rows = cursorObject.fetchall()
+		db.commit()
+		return rows
 
 # -----------------------------------------------------------
 
@@ -84,7 +90,7 @@ if args.add_mail_ids:
 	# Obtain the mail IDs and check whether they are already in the queue or not.
 	mail_ids = args.add_mail_ids
 	for mail_id in mail_ids:
-		queue_entries_result = execute_select_sql_query(database, "SELECT id FROM spam_classifier_queue WHERE mail_id = %i" % mail_id)
+		queue_entries_result = execute_select_sql_query(database, "SELECT id FROM spam_classifier_queue WHERE mail_id = %s", (mail_id,))
 		if len(queue_entries_result) > 0:
 			if verbose:
 				print("INFO: Mail ID: %i already exists in the queue. Skipping." % mail_id)
@@ -100,7 +106,7 @@ if args.add_mail_ids:
 elif args.remove_mail_ids:
 	mail_ids = args.remove_mail_ids
 	for mail_id in mail_ids:
-		queue_entries_result = execute_select_sql_query(database, "SELECT id FROM spam_classifier_queue WHERE mail_id = %i" % mail_id)
+		queue_entries_result = execute_select_sql_query(database, "SELECT id FROM spam_classifier_queue WHERE mail_id = %s", (mail_id,))
 		if len(queue_entries_result) == 0:
 			if verbose:
 				print("INFO: Mail ID: %i does not exist in the queue. Skipping." % mail_id)
@@ -112,12 +118,12 @@ elif args.remove_mail_ids:
 				print("INFO: Removed all entries for mail ID: %i from the queue." % mail_id)
 elif args.query:
 	# Obtain the number of mail IDs currently in the queue.
-	queue_entries_result = execute_select_sql_query(database, "SELECT COUNT(*) FROM spam_classifier_queue")
+	queue_entries_result = execute_select_sql_query(database, "SELECT COUNT(*) FROM spam_classifier_queue", ())
 	count_row = queue_entries_result[0]
 	print("INFO: %i mail IDs in the queue" % count_row[0])
 elif args.list:
 	# Retrieve a list of mail IDs currently in the queue.
-	queue_entries_result = execute_select_sql_query(database, "SELECT id,mail_id,added FROM spam_classifier_queue")
+	queue_entries_result = execute_select_sql_query(database, "SELECT id,mail_id,added FROM spam_classifier_queue", ())
 	if len(queue_entries_result) == 0:
 		print("INFO: Spam classifier queue is empty.")
 	else:
