@@ -168,7 +168,7 @@ except KeyError:
 try:
 	classifier_timeout_seconds = int(classifier_config["classifier_timeout_seconds"])
 except ValueError:
-	logger.error("Expected integer value for 'classifier_timeout_seconds' in the configuration!")
+	eprint("Expected integer value for 'classifier_timeout_seconds' in the configuration!")
 	exit(1)
 
 # Open connection to the database to retrieve and update information.
@@ -307,12 +307,16 @@ try:
 	p = subprocess.run(command, input=json_text, capture_output=True, text=True, timeout=classifier_timeout_seconds)
 	classifier_result = p.stdout.strip()
 except subprocess.TimeoutExpired:
-	logger.error("Classifier timed out in wrapper execution on mail ID: %i!" % mail_id)
+	eprint("Classifier timed out in wrapper execution on mail ID: %i!" % mail_id)
 	exit(1)
 
 # Parse the classifier output as JSON and look at the detection(s).
-classifier_json = json.loads(classifier_result)
-classifier_version = classifier_json["version"]
+try:
+	classifier_json = json.loads(classifier_result)
+	classifier_version = classifier_json["version"]
+except:
+	eprint("Failed to parse output as JSON! Mail ID: %i" % mail_id)
+	exit(1)
 
 # If verbose mode was requested, print the JSON output, and consider it a dry-run. We don't enter anything in the database.
 if args.verbose:
