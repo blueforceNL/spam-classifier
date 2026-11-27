@@ -244,7 +244,7 @@ else:
 	json_obj["mail"]["encoded_body"] = mail_body_entry[0]
 
 # Query the domain associated to the incoming mail message.
-domain_entry_result = execute_select_sql_query(database, "SELECT domain,sinkholed,added,countries.name FROM domains JOIN countries ON domains.country_id = countries.id WHERE domains.id = %s", (mail_entry[14],))
+domain_entry_result = execute_select_sql_query(database, "SELECT domain,sinkholed,added,countries.name FROM domains LEFT JOIN countries ON domains.country_id = countries.id WHERE domains.id = %s", (mail_entry[14],))
 if len(domain_entry_result) < 1:
 	eprint("No domain was associated to this mail message!")
 else:
@@ -393,7 +393,8 @@ if "detections" in classifier_json:
 	# If the message must be retained to future reference, move it to the retained messages directory. Otherwise, we delete the message and attachments from disk and its body from the database.
 	if retain_message:
 		# Move the message file to the retained messages directory.
-		shutil.move(full_message_path, os.path.join(classifier_config["retained_messages_dir"], mail_message_filename))
+		if os.path.isfile(full_message_path):
+			shutil.move(full_message_path, os.path.join(classifier_config["retained_messages_dir"], mail_message_filename))
 	else:
 		# Message file does not need to be retained, so we delete everything from disk and the database.
 		delete_message_from_disk(mail_id, full_message_path, num_attachments, attachments_dir)
