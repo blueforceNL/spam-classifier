@@ -94,6 +94,42 @@ def delete_message_from_disk(mail_id, message_file_path, num_attachments, attach
 	# Remove the mail body from the database.
 	execute_mutation_sql_query(database, "DELETE FROM mail_message_bodies WHERE mail_id = %s", (mail_id,))
 
+# Purges all existing detection information from the database.
+def purge_existing_detections(database, mail_id):
+	detection_link_result = execute_select_sql_query(database, "SELECT id FROM mail_classifications_link WHERE mail_id = %s", (mail_id,))
+	for entry in detection_link_result:
+		# Select all indicators linked to this detection. We want to check if any of those have more than one reference.
+		classification_indicators_result = execute_select_sql_query(database, "SELECT indicator_id FROM indicator_classification_link WHERE classifications_link_id = %s", (entry[0],))
+
+		# Remove the link to the indicator from the given mail ID. Then, only other links will appear below and we should not touch them.
+		execute_mutation_sql_query(database, "DELETE FROM indicator_classification_link WHERE classifications_link_id = %s", (entry[0],))
+
+		# Iterate over the linked indicators to see if there are any other links remaining.
+		for linked_indicator in classification_indicators_result:
+			# Select all indicator links with the same ID as this one, having a different classification ID.
+			other_indicator_links_result = execute_select_sql_query(database, "SELECT id FROM indicator_classification_link WHERE indicator_id = %s", (linked_indicator[0],))
+			if len(other_indicator_links_result) == 0:
+				# No other links to this indicator exist, and therefore, we can remove the indicator from the database as well.
+				execute_mutation_sql_query(database, "DELETE FROM indicators WHERE id = %s", (linked_indicator[0],))
+
+		# Delete attributes if any are linked to this detection.
+		execute_mutation_sql_query(database, "DELETE FROM linked_attributes WHERE classifications_link_id = %s", (entry[0],))
+
+		# Finally, remove the classification from the database.
+		execute_mutation_sql_query(database, "DELETE FROM mail_classifications_link WHERE id = %s", (entry[0],))
+
+# Retrieve most recent API state.
+def get_system_api_state(database):
+	# Query API state stable.
+	system_api_state_result = execute_select_sql_query(database, "SELECT MAX(state) FROM api_state", ());
+	if len(system_api_state_result) == 0:
+		eprint("System API state table is empty! No state was obtained, so execution aborted.")
+		exit(1)
+
+	# Get the API state to insert with the new classification.
+	system_api_state_entry = system_api_state_result[0]
+	return system_api_state_entry[0]
+
 # ----------------------------------------------------------|
 # Main classifier wrapper code                              |
 # ----------------------------------------------------------|
@@ -287,87 +323,63 @@ if args.verbose:
 # From here on, the database will be altered.              |
 # ---------------------------------------------------------|
 
-# Now find out whether there is already a detection linked to this mail message.
-# If so, we must remove it: new detection logic may or may not induce a new classification.
-# Suppose there were too much false positives with a previous detection, then we will have loose ends if we don't remove the old crap.
-detection_link_result = execute_select_sql_query(database, "SELECT id FROM mail_classifications_link WHERE mail_id = %s", (mail_id,))
-for entry in detection_link_result:
-	# Select all indicators linked to this detection. We want to check if any of those have more than one reference.
-	classification_indicators_result = execute_select_sql_query(database, "SELECT indicator_id FROM indicator_classification_link WHERE classifications_link_id = %s", (entry[0],))
-
-	# Remove the link to the indicator from the given mail ID. Then, only other links will appear below and we should not touch them.
-	execute_mutation_sql_query(database, "DELETE FROM indicator_classification_link WHERE classifications_link_id = %s", (entry[0],))
-
-	# Iterate over the linked indicators to see if there are any other links remaining.
-	for linked_indicator in classification_indicators_result:
-		# Select all indicator links with the same ID as this one, having a different classification ID.
-		other_indicator_links_result = execute_select_sql_query(database, "SELECT id FROM indicator_classification_link WHERE indicator_id = %s", (linked_indicator[0],))
-		if len(other_indicator_links_result) == 0:
-			# No other links to this indicator exist, and therefore, we can remove the indicator from the database as well.
-			execute_mutation_sql_query(database, "DELETE FROM indicators WHERE id = %s", (linked_indicator[0],))
-
-	# Delete attributes if any are linked to this detection.
-	execute_mutation_sql_query(database, "DELETE FROM linked_attributes WHERE classifications_link_id = %s", (entry[0],))
-
-	# Finally, remove the classification from the database.
-	execute_mutation_sql_query(database, "DELETE FROM mail_classifications_link WHERE id = %s", (entry[0],))
-
 # If there are detections, parse them. This is logic for the production mode (non-verbose).
 if "detections" in classifier_json:
-	# Keep track of whether at least one detection for this message requires the message file and attachments to be retained.
-	retain_message = False
-
-	# Read the detections from the classifier result and process them.
+	# Test whether the detections in the classifier result are present in the database. We need to do this beforehand or we might leave stale entries in the database.
+	detection_id_table = {}
 	detections = classifier_json["detections"]
+	retain_message = False
 	for detection in detections:
-		# Select detection from the database.
 		detection_result = execute_select_sql_query(database, "SELECT id,store_message_file FROM mail_classifications WHERE name = %s", (detection["name"],))
 		if len(detection_result) != 1:
 			eprint("Detection: %s was not found in the database! Must be added manually.." % detection["name"])
 			exit(1)
 
-		# Get the ID of the detection to link to.
+		# Get the ID of the detection to link to and store the object with it.
 		detection_entry = detection_result[0]
-		detection_id = detection_entry[0]
+		detection_id_table[detection_entry[0]] = detection
+
+		# Check whether the message should be retained or not.
 		if detection_entry[1] != 0:
 			retain_message = True
 
-		# Query the most recent system API state, we will insert that value with the new classification.
-		system_api_state_result = execute_select_sql_query(database, "SELECT MAX(state) FROM api_state", ());
-		if len(system_api_state_result) == 0:
-			eprint("System API state table is empty! No state was obtained, so execution aborted.")
-			exit(1)
+	# Get the most recent system API state, we will insert that value with the new classification.
+	system_api_state = get_system_api_state(database)
 
-		# Get the API state to insert with the new classification.
-		system_api_state_entry = system_api_state_result[0]
-		system_api_state = system_api_state_entry[0]
+	# Now find out whether there is already a detection linked to this mail message.
+	# If so, we must remove it: new detection logic may or may not induce a new classification.
+	# Suppose there were too much false positives with a previous detection, then we will have loose ends if we don't remove the old crap.
+	purge_existing_detections(database, mail_id)
 
+	# Process the obtained detections.
+	for detection_id,detection in detection_id_table.items():
 		# Old detections deleted, we can insert the new one. Start with the detection itself.
 		# We insert the state value itself in the mail_classifications_link table because it saves us a JOIN and space-wise it doesn't matter.
 		# However, if normalized correctly, we would have inserted a reference to api_state.id instead.
 		classification_link_id = execute_mutation_sql_query(database, "INSERT INTO mail_classifications_link (mail_id,classification_id,confidence,version,added_state) VALUES (%s,%s,%s,%s,%s)", (mail_id,detection_id,detection["confidence"], json_obj["version"], system_api_state))
 
 		# Now we process the indicators associated with the detection.
-		for indicator in detection["indicators"]:
-			# Get the correct indicator ID from the text representation in the JSON output.
-			indicator_type_id_result = execute_select_sql_query(database, "SELECT id FROM indicator_types WHERE type = %s", (indicator["type"],))
-			if len(indicator_type_id_result) == 0:
-				eprint("Could not find indicator type: %s in the database! Skipping indicator." % indicator["type"])
-				continue
+		if detection.get("indicators"):
+			for indicator in detection["indicators"]:
+				# Get the correct indicator ID from the text representation in the JSON output.
+				indicator_type_id_result = execute_select_sql_query(database, "SELECT id FROM indicator_types WHERE type = %s", (indicator["type"],))
+				if len(indicator_type_id_result) == 0:
+					eprint("Could not find indicator type: %s in the database! Skipping indicator." % indicator["type"])
+					continue
 
-			# Query the indicators table to check whether this indicator already exists. If so, we only need to insert a link to the new classification.
-			indicator_type_entry = indicator_type_id_result[0]
-			indicator_type_id = indicator_type_entry[0]
-			indicator_result = execute_select_sql_query(database, "SELECT id FROM indicators WHERE indicator_type_id = %s AND value = %s", (indicator_type_id, indicator["value"]))
-			if len(indicator_result) == 0:
-				# Indicator does not exist in the database yet, so insert it here.
-				indicator_id = execute_mutation_sql_query(database, "INSERT INTO indicators(indicator_type_id,value) VALUES (%s,%s)", (indicator_type_id, indicator["value"]))
-			else:
-				indicator_entry = indicator_result[0]
-				indicator_id = indicator_entry[0]
+				# Query the indicators table to check whether this indicator already exists. If so, we only need to insert a link to the new classification.
+				indicator_type_entry = indicator_type_id_result[0]
+				indicator_type_id = indicator_type_entry[0]
+				indicator_result = execute_select_sql_query(database, "SELECT id FROM indicators WHERE indicator_type_id = %s AND value = %s", (indicator_type_id, indicator["value"]))
+				if len(indicator_result) == 0:
+					# Indicator does not exist in the database yet, so insert it here.
+					indicator_id = execute_mutation_sql_query(database, "INSERT INTO indicators(indicator_type_id,value) VALUES (%s,%s)", (indicator_type_id, indicator["value"]))
+				else:
+					indicator_entry = indicator_result[0]
+					indicator_id = indicator_entry[0]
 
-			# Finally, insert the link between the indicator and the classification.
-			execute_mutation_sql_query(database, "INSERT INTO indicator_classification_link (classifications_link_id,indicator_id,confidence) VALUES (%s,%s,%s)", (classification_link_id, indicator_id, indicator["confidence"]))
+				# Finally, insert the link between the indicator and the classification.
+				execute_mutation_sql_query(database, "INSERT INTO indicator_classification_link (classifications_link_id,indicator_id,confidence) VALUES (%s,%s,%s)", (classification_link_id, indicator_id, indicator["confidence"]))
 
 		# Process the attributes linked to the detection.
 		if detection.get("attributes"):
