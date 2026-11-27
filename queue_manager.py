@@ -106,12 +106,19 @@ except ValueError:
 	logger.error("Expected integer value for 'classifier_timeout_seconds' in the configuration!")
 	exit(1)
 
+# Get query block size from the configuration.
+try:
+	main_query_block_size = int(classifier_config["main_query_block_size"])
+except ValueError:
+	logger.error("Expected integer value for 'main_query_block_size' in the configuration!")
+	exit(1)
+
 # Enter the program loop, staying alive and checking for new entries in the classifier queue.
 sigHandler = SignalHandler()
 while not sigHandler.break_loop:
 	# Query the spam_classifier_queue table to check for new entries. We pick the ones with the lowest ID to process first.
 	# To avoid doing too many database queries, we select up to 5 new queue items in one query.
-	queue_entries_result = execute_select_sql_query(database, "SELECT id,mail_id FROM spam_classifier_queue ORDER BY id LIMIT 5", ())
+	queue_entries_result = execute_select_sql_query(database, "SELECT id,mail_id FROM spam_classifier_queue ORDER BY id LIMIT %s", (main_query_block_size,))
 	for queue_entry in queue_entries_result:
 		id = queue_entry[0]
 		mail_id = queue_entry[1]
@@ -148,5 +155,5 @@ while not sigHandler.break_loop:
 		# Just delete the row from the spam_classifier_queue table and move on to the next.
 		execute_mutation_sql_query(database, "DELETE FROM spam_classifier_queue WHERE id = %s", (id,))
 
-	# Sleep a little bit to avoid hogging the CPU.
-	time.sleep(1/100)
+	# Sleep a little bit to avoid hogging the CPU. We run the classifier in blocks so 100ms will be enough of a break.
+	time.sleep(1/10)

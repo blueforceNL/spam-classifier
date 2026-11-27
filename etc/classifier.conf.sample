@@ -7,3 +7,4 @@ processing_finished_dir = /sinkhole/processing_finished
 attachments_dir = /sinkhole/attachments
 retained_messages_dir = /sinkhole/retained_messages
 classifier_timeout_seconds = 60
+main_query_block_size = 5
