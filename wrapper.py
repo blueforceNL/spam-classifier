@@ -67,7 +67,7 @@ def connect_mysql_database():
 	return database if database.is_connected() else None
 
 # Deletes a message file from disk including its attachments, and removes the body and attachments from the database.
-def delete_message_from_disk(mail_id, message_file_path, num_attachments, attachments_dir):
+def delete_message_from_disk(database, mail_id, message_file_path, num_attachments, attachments_dir):
 	# Delete message file from disk. If the message file does not exist anymore, we just let it slip.
 	try:
 		os.remove(message_file_path)
@@ -313,7 +313,6 @@ except subprocess.TimeoutExpired:
 # Parse the classifier output as JSON and look at the detection(s).
 try:
 	classifier_json = json.loads(classifier_result)
-	classifier_version = classifier_json["version"]
 except:
 	eprint("Failed to parse output as JSON! Mail ID: %i" % mail_id)
 	exit(1)
@@ -395,9 +394,11 @@ if "detections" in classifier_json:
 		# Move the message file to the retained messages directory.
 		if os.path.isfile(full_message_path):
 			shutil.move(full_message_path, os.path.join(classifier_config["retained_messages_dir"], mail_message_filename))
+		else:
+			eprint("Failed to retain message file for mail ID: %i!" % mail_id)
 	else:
 		# Message file does not need to be retained, so we delete everything from disk and the database.
-		delete_message_from_disk(mail_id, full_message_path, num_attachments, attachments_dir)
+		delete_message_from_disk(database, mail_id, full_message_path, num_attachments, attachments_dir)
 
 	# Processed all detections, we let the queue manager know there was at least one detection.
 	print("DETECTED")
@@ -407,4 +408,4 @@ else:
 
 	# Result is clean, and therefore, message file does not need to be retained. Delete everything from disk and the database.
 	# FIXME: not yet, because we want to implement more detections first!
-#	delete_message_from_disk(mail_id, full_message_path, num_attachments, attachments_dir)
+#	delete_message_from_disk(database, mail_id, full_message_path, num_attachments, attachments_dir)

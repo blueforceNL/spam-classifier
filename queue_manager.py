@@ -67,7 +67,7 @@ journald_handler.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
 logger.setLevel(logging.INFO)
 logger.addHandler(journald_handler)
 
-# Handles SIGTERM and SIGKILL signals which are sent by systemd. While we are at it, let's do SIGINT as well.
+# Handles SIGTERM and SIGINT signals which are sent by systemd. While we are at it, let's do SIGINT as well.
 class SignalHandler:
 	break_loop = False
 	def __init__(self):
@@ -131,6 +131,7 @@ while not sigHandler.break_loop:
 			classifier_result = p.stdout.strip()
 			exit_code = p.returncode
 		except KeyboardInterrupt:
+			logger.info("Received CTRL + C.")
 			continue
 		except subprocess.TimeoutExpired:
 			logger.error("Classifier timed out when processing mail ID: %i!" % mail_id)
